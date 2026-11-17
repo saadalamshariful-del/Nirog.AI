@@ -1,0 +1,6 @@
+{
+  "name": "NIROG.AI — In Pursuit of Wellness",
+  "description": "Interactive 3D healthcare technology ecosystem connecting patients, doctors, hospitals, diagnostic centres, pharmaceutical companies, pharmacies, and health insurers.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

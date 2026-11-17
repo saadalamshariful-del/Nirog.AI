@@ -1,0 +1,411 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 1. Global Safety Net (Default Deny Catch-All)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Boot-time connectivity check doc (non-PII health probe)
+    match /test/{docId} {
+      allow get: if docId == 'connection';
+    }
+
+    // Shared Hardened Primitives
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isOwner(userId) {
+      return isVerifiedUser() && request.auth.uid == userId;
+    }
+
+    function workspaceExists(userId) {
+      return exists(/databases/$(database)/documents/workspaces/$(userId))
+        && get(/databases/$(database)/documents/workspaces/$(userId)).data.uid == userId;
+    }
+
+    // Validation Blueprints (Matching firebase-blueprint.json)
+    function isValidWorkspace(data, userId) {
+      return data.keys().hasAll(['uid', 'displayName', 'diaryOn', 'diaryDaysMask', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly([
+          'uid',
+          'displayName',
+          'diaryOn',
+          'diaryDaysMask',
+          'driveFolderId',
+          'driveFolderName',
+          'driveFileId',
+          'lastDriveSyncIso',
+          'createdAt',
+          'updatedAt'
+        ])
+        && isValidId(data.uid)
+        && data.uid == userId
+        && data.displayName is string
+        && data.displayName.size() <= 160
+        && data.diaryOn is bool
+        && data.diaryDaysMask is string
+        && data.diaryDaysMask.size() == 7
+        && data.diaryDaysMask.matches('^[01]{7}$')
+        && (!('driveFolderId' in data) || (data.driveFolderId is string && data.driveFolderId.size() <= 128))
+        && (!('driveFolderName' in data) || (data.driveFolderName is string && data.driveFolderName.size() <= 120))
+        && (!('driveFileId' in data) || (data.driveFileId is string && data.driveFileId.size() <= 128))
+        && (!('lastDriveSyncIso' in data) || (data.lastDriveSyncIso is string && data.lastDriveSyncIso.size() <= 64))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidPrivateProfile(data, userId) {
+      return data.keys().hasAll(['uid', 'email', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'email', 'createdAt', 'updatedAt'])
+        && isValidId(data.uid)
+        && data.uid == userId
+        && data.email is string
+        && data.email.size() <= 160
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidOrder(data, userId) {
+      return data.keys().hasAll(['uid', 'ref', 'status', 'payMethod', 'totalBdt', 'itemCount', 'summary', 'createdAt'])
+        && data.keys().hasOnly(['uid', 'ref', 'status', 'payMethod', 'totalBdt', 'itemCount', 'summary', 'createdAt'])
+        && isValidId(data.uid)
+        && data.uid == userId
+        && isValidId(data.ref)
+        && data.ref.size() >= 3
+        && data.ref.size() <= 40
+        && data.status in ['received', 'rx_review', 'confirmed', 'packed', 'dispatched', 'delivered']
+        && data.payMethod in ['cod', 'card', 'mfs']
+        && data.totalBdt is number
+        && data.totalBdt >= 0
+        && data.itemCount is number
+        && data.itemCount >= 0
+        && data.summary is string
+        && data.summary.size() <= 500
+        && data.createdAt is timestamp;
+    }
+
+    function isValidSupportCase(data, userId) {
+      return data.keys().hasAll(['uid', 'ref', 'program', 'status', 'summary', 'createdAt'])
+        && data.keys().hasOnly(['uid', 'ref', 'program', 'status', 'summary', 'createdAt'])
+        && isValidId(data.uid)
+        && data.uid == userId
+        && isValidId(data.ref)
+        && data.ref.size() >= 3
+        && data.ref.size() <= 40
+        && data.program is string
+        && data.program.size() <= 120
+        && data.status in ['submitted', 'under_review', 'more_info', 'approved', 'withdrawn']
+        && data.summary is string
+        && data.summary.size() <= 500
+        && data.createdAt is timestamp;
+    }
+
+    function isValidAppointment(data, userId) {
+      return data.keys().hasAll(['uid', 'ref', 'patient', 'time', 'reason', 'status', 'vitals', 'createdAt'])
+        && data.keys().hasOnly(['uid', 'ref', 'patient', 'time', 'reason', 'status', 'vitals', 'createdAt'])
+        && isValidId(data.uid)
+        && data.uid == userId
+        && isValidId(data.ref)
+        && data.ref.size() >= 3
+        && data.ref.size() <= 40
+        && data.patient is string
+        && data.patient.size() <= 120
+        && data.time is string
+        && data.time.size() <= 40
+        && data.reason is string
+        && data.reason.size() <= 240
+        && data.status in ['Scheduled', 'Waiting', 'In Review', 'Completed']
+        && data.vitals is string
+        && data.vitals.size() <= 240
+        && data.createdAt is timestamp;
+    }
+
+    function isValidPvReport(data, userId) {
+      return data.keys().hasAll(['uid', 'ref', 'reporter', 'product', 'severity', 'description', 'status', 'createdAt'])
+        && data.keys().hasOnly(['uid', 'ref', 'reporter', 'product', 'severity', 'description', 'status', 'createdAt'])
+        && isValidId(data.uid)
+        && data.uid == userId
+        && isValidId(data.ref)
+        && data.ref.size() >= 3
+        && data.ref.size() <= 40
+        && data.reporter is string
+        && data.reporter.size() <= 80
+        && data.product is string
+        && data.product.size() <= 120
+        && data.severity in ['Mild', 'Moderate', 'Severe / Seek urgent care']
+        && data.description is string
+        && data.description.size() <= 1000
+        && data.status in ['Received', 'Under Pharmacovigilance Review', 'Closed']
+        && data.createdAt is timestamp;
+    }
+
+    function isValidDriveBackup(data, userId) {
+      return data.keys().hasAll(['uid', 'fileId', 'folderId', 'fileName', 'folderName', 'recordCount', 'createdAt'])
+        && data.keys().hasOnly(['uid', 'fileId', 'folderId', 'fileName', 'folderName', 'recordCount', 'createdAt'])
+        && isValidId(data.uid)
+        && data.uid == userId
+        && data.fileId is string
+        && data.fileId.size() >= 1
+        && data.fileId.size() <= 128
+        && data.folderId is string
+        && data.folderId.size() >= 1
+        && data.folderId.size() <= 128
+        && data.fileName is string
+        && data.fileName.size() <= 160
+        && data.folderName is string
+        && data.folderName.size() <= 120
+        && data.recordCount is number
+        && data.recordCount >= 0
+        && data.createdAt is timestamp;
+    }
+
+    function isValidSourcingRequest(data, userId) {
+      return data.keys().hasAll([
+          'uid',
+          'ref',
+          'hospitalName',
+          'category',
+          'originHub',
+          'itemName',
+          'quantity',
+          'dgdaAssistance',
+          'patientOrDeptContext',
+          'status',
+          'createdAt'
+        ])
+        && data.keys().hasOnly([
+          'uid',
+          'ref',
+          'hospitalName',
+          'category',
+          'originHub',
+          'itemName',
+          'quantity',
+          'dgdaAssistance',
+          'patientOrDeptContext',
+          'status',
+          'createdAt'
+        ])
+        && isValidId(data.uid)
+        && data.uid == userId
+        && isValidId(data.ref)
+        && data.ref.size() >= 3
+        && data.ref.size() <= 40
+        && data.hospitalName is string
+        && data.hospitalName.size() >= 1
+        && data.hospitalName.size() <= 160
+        && data.category in [
+          'Unapproved / Unavailable Medicine',
+          'Hospital Beds',
+          'Clinical Equipment & Devices',
+          'Robotic Surgery Systems'
+        ]
+        && data.originHub in [
+          'China NMPA Originator Hub',
+          'China MedTech Partner',
+          'Turkey MedTech Partner'
+        ]
+        && data.itemName is string
+        && data.itemName.size() >= 1
+        && data.itemName.size() <= 200
+        && data.quantity is number
+        && data.quantity >= 1
+        && data.dgdaAssistance is bool
+        && data.patientOrDeptContext is string
+        && data.patientOrDeptContext.size() >= 1
+        && data.patientOrDeptContext.size() <= 300
+        && data.status in [
+          'Submitted',
+          'DGDA Filing / Partner Quote',
+          'Approved / In Transit'
+        ]
+        && data.createdAt is timestamp;
+    }
+
+    // Root Workspace Document (Authenticated Verified Owner Only)
+    match /workspaces/{userId} {
+      allow get: if isValidId(userId) && isOwner(userId);
+      allow list: if isOwner(userId) && resource.data.uid == request.auth.uid;
+      allow create: if isValidId(userId)
+        && isOwner(userId)
+        && isValidWorkspace(incoming(), userId)
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(userId)
+        && isOwner(userId)
+        && isValidWorkspace(incoming(), userId)
+        && incoming().uid == existing().uid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'diaryOn', 'diaryDaysMask', 'updatedAt']) ||
+          incoming().diff(existing()).affectedKeys().hasOnly(['driveFolderId', 'driveFolderName', 'driveFileId', 'lastDriveSyncIso', 'updatedAt'])
+        );
+      allow delete: if false;
+
+      // Split PII Profile Subcollection
+      match /private/{docId} {
+        allow get: if isValidId(userId) && docId == 'profile' && isOwner(userId);
+        allow list: if false;
+        allow create: if isValidId(userId)
+          && docId == 'profile'
+          && isOwner(userId)
+          && isValidPrivateProfile(incoming(), userId)
+          && workspaceExists(userId)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time;
+        allow update: if isValidId(userId)
+          && docId == 'profile'
+          && isOwner(userId)
+          && isValidPrivateProfile(incoming(), userId)
+          && incoming().uid == existing().uid
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly(['email', 'updatedAt']);
+        allow delete: if false;
+      }
+
+      // Workspace Orders Subcollection
+      match /orders/{orderId} {
+        allow get: if isValidId(userId) && isValidId(orderId) && isOwner(userId);
+        allow list: if isOwner(userId) && resource.data.uid == request.auth.uid;
+        allow create: if isValidId(userId)
+          && isValidId(orderId)
+          && isOwner(userId)
+          && isValidOrder(incoming(), userId)
+          && workspaceExists(userId)
+          && incoming().createdAt == request.time;
+        allow update: if isValidId(userId)
+          && isValidId(orderId)
+          && isOwner(userId)
+          && isValidOrder(incoming(), userId)
+          && existing().status != 'delivered'
+          && incoming().uid == existing().uid
+          && incoming().ref == existing().ref
+          && incoming().createdAt == existing().createdAt
+          && incoming().diff(existing()).affectedKeys().hasOnly(['status']);
+        allow delete: if false;
+      }
+
+      // Workspace Support Cases Subcollection
+      match /supportCases/{caseId} {
+        allow get: if isValidId(userId) && isValidId(caseId) && isOwner(userId);
+        allow list: if isOwner(userId) && resource.data.uid == request.auth.uid;
+        allow create: if isValidId(userId)
+          && isValidId(caseId)
+          && isOwner(userId)
+          && isValidSupportCase(incoming(), userId)
+          && workspaceExists(userId)
+          && incoming().createdAt == request.time;
+        allow update: if isValidId(userId)
+          && isValidId(caseId)
+          && isOwner(userId)
+          && isValidSupportCase(incoming(), userId)
+          && !(existing().status in ['approved', 'withdrawn'])
+          && incoming().uid == existing().uid
+          && incoming().ref == existing().ref
+          && incoming().createdAt == existing().createdAt
+          && incoming().diff(existing()).affectedKeys().hasOnly(['status']);
+        allow delete: if false;
+      }
+
+      // Workspace Appointments Subcollection
+      match /appointments/{appointmentId} {
+        allow get: if isValidId(userId) && isValidId(appointmentId) && isOwner(userId);
+        allow list: if isOwner(userId) && resource.data.uid == request.auth.uid;
+        allow create: if isValidId(userId)
+          && isValidId(appointmentId)
+          && isOwner(userId)
+          && isValidAppointment(incoming(), userId)
+          && workspaceExists(userId)
+          && incoming().createdAt == request.time;
+        allow update: if isValidId(userId)
+          && isValidId(appointmentId)
+          && isOwner(userId)
+          && isValidAppointment(incoming(), userId)
+          && existing().status != 'Completed'
+          && incoming().uid == existing().uid
+          && incoming().ref == existing().ref
+          && incoming().createdAt == existing().createdAt
+          && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'vitals']);
+        allow delete: if false;
+      }
+
+      // Workspace Pharmacovigilance Reports Subcollection
+      match /pvReports/{reportId} {
+        allow get: if isValidId(userId) && isValidId(reportId) && isOwner(userId);
+        allow list: if isOwner(userId) && resource.data.uid == request.auth.uid;
+        allow create: if isValidId(userId)
+          && isValidId(reportId)
+          && isOwner(userId)
+          && isValidPvReport(incoming(), userId)
+          && workspaceExists(userId)
+          && incoming().createdAt == request.time;
+        allow update: if isValidId(userId)
+          && isValidId(reportId)
+          && isOwner(userId)
+          && isValidPvReport(incoming(), userId)
+          && existing().status != 'Closed'
+          && incoming().uid == existing().uid
+          && incoming().ref == existing().ref
+          && incoming().createdAt == existing().createdAt
+          && incoming().diff(existing()).affectedKeys().hasOnly(['status']);
+        allow delete: if false;
+      }
+
+      // Workspace Google Drive Backup Records
+      match /driveBackups/{backupId} {
+        allow get: if isValidId(userId) && isValidId(backupId) && isOwner(userId);
+        allow list: if isOwner(userId) && resource.data.uid == request.auth.uid;
+        allow create: if isValidId(userId)
+          && isValidId(backupId)
+          && isOwner(userId)
+          && isValidDriveBackup(incoming(), userId)
+          && workspaceExists(userId)
+          && incoming().createdAt == request.time;
+        allow update, delete: if false;
+      }
+
+      // Workspace Hospital Direct Global Sourcing & DGDA NPA Requests
+      match /sourcingRequests/{requestId} {
+        allow get: if isValidId(userId) && isValidId(requestId) && isOwner(userId);
+        allow list: if isOwner(userId) && resource.data.uid == request.auth.uid;
+        allow create: if isValidId(userId)
+          && isValidId(requestId)
+          && isOwner(userId)
+          && isValidSourcingRequest(incoming(), userId)
+          && workspaceExists(userId)
+          && incoming().createdAt == request.time;
+        allow update: if isValidId(userId)
+          && isValidId(requestId)
+          && isOwner(userId)
+          && isValidSourcingRequest(incoming(), userId)
+          && existing().status != 'Approved / In Transit'
+          && incoming().uid == existing().uid
+          && incoming().ref == existing().ref
+          && incoming().createdAt == existing().createdAt
+          && incoming().diff(existing()).affectedKeys().hasOnly(['status']);
+        allow delete: if false;
+      }
+    }
+  }
+}
